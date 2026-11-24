@@ -20,28 +20,29 @@ app.add_middleware(
 def clean_filename(title: str) -> str:
     return re.sub(r'[\\/*?:"<>|]', "", title).strip()[:60] or "media"
 
-@app.get("/")
+@app.get('/')
+@app.head('/')
 def home():
     return {"status": "online", "message": "Video & Audio Downloader API Ready"}
 
-@app.get("/info")
+@app.get('/info')
 def get_info(url: str = Query(..., description="YouTube, Instagram, or Facebook URL")):
     ydl_opts = {
-        "quiet": True,
-        "no_warnings": True,
-        "skip_download": True,
+        'quiet': True,
+        'no_warnings': True,
+        'skip_download': True,
     }
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
-
+        
         formats = info.get("formats", [])
         available_heights = set()
         for f in formats:
             h = f.get("height")
             if h and f.get("vcodec") != "none":
                 available_heights.add(h)
-
+        
         target_qualities = [360, 480, 720, 1080, 1440, 2160]
         video_buttons = []
         for q in target_qualities:
@@ -52,7 +53,7 @@ def get_info(url: str = Query(..., description="YouTube, Instagram, or Facebook 
                 elif q == 2160:
                     label = "2160p (4K)"
                 video_buttons.append({"quality": str(q), "label": label, "type": "mp4"})
-
+        
         audio_buttons = [
             {"quality": "mp3", "label": "MP3 Audio", "type": "mp3"},
             {"quality": "m4a", "label": "M4A (AAC) Audio", "type": "m4a"},
@@ -68,70 +69,66 @@ def get_info(url: str = Query(..., description="YouTube, Instagram, or Facebook 
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.get("/download")
+@app.get('/download')
 def download_media(
     background_tasks: BackgroundTasks,
     url: str = Query(...),
-    quality: str = Query("720", description="360, 480, 720, 1080, 1440, 2160, mp3, or m4a"),
+    quality: str = Query("720")
 ):
-    temp_dir = tempfile.mkdtemp(prefix="dl_")
-    file_id = str(uuid.uuid4())[:8]
-    output_template = os.path.join(temp_dir, f"{file_id}.%(ext)s")
-
+    temp_dir = tempfile.mkdtemp()
     try:
-        if quality in ["mp3", "m4a"]:
+        info_opts = {'quiet': True, 'no_warnings': True}
+        with yt_dlp.YoutubeDL(info_opts) as ydl:
+            info = ydl.extract_info(url, download=False)
+            title = clean_filename(info.get("title", "media"))
+
+        unique_id = str(uuid.uuid4())[:8]
+        out_template = os.path.join(temp_dir, f"{title}_{unique_id}.%(ext)s")
+
+        if quality == "mp3":
             ydl_opts = {
-                "format": "bestaudio/best",
-                "outtmpl": output_template,
-                "quiet": True,
-                "no_warnings": True,
-                "postprocessors": [
-                    {
-                        "key": "FFmpegExtractAudio",
-                        "preferredcodec": quality,
-                        "preferredquality": "192",
-                    }
-                ],
+                'format': 'bestaudio/best',
+                'outtmpl': out_template,
+                'quiet': True,
+                'postprocessors': [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }],
             }
-            media_type = "audio/mpeg" if quality == "mp3" else "audio/mp4"
-            ext = quality
+            ext = "mp3"
+            media_type = "audio/mpeg"
+        elif quality == "m4a":
+            ydl_opts = {
+                'format': 'bestaudio[ext=m4a]/bestaudio/best',
+                'outtmpl': out_template,
+                'quiet': True,
+            }
+            ext = "m4a"
+            media_type = "audio/mp4"
         else:
-            height = int(quality)
             ydl_opts = {
-                "format": f"bestvideo[height<={height}][ext=mp4]+bestaudio[ext=m4a]/bestvideo[height<={height}]+bestaudio/best",
-                "outtmpl": output_template,
-                "merge_output_format": "mp4",
-                "quiet": True,
-                "no_warnings": True,
-                "postprocessor_args": {
-                    "merger": ["-c:v", "copy", "-c:a", "aac"]
-                },
+                'format': f'bestvideo[height<={quality}]+bestaudio/best[height<={quality}]/best',
+                'outtmpl': out_template,
+                'merge_output_format': 'mp4',
+                'quiet': True,
             }
-            media_type = "video/mp4"
             ext = "mp4"
+            media_type = "video/mp4"
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=True)
-            title = clean_filename(info.get("title", "video"))
+            ydl.download([url])
 
-        final_file = None
-        for fname in os.listdir(temp_dir):
-            if fname.startswith(file_id):
-                final_file = os.path.join(temp_dir, fname)
-                break
+        downloaded_files = os.listdir(temp_dir)
+        if not downloaded_files:
+            raise HTTPException(status_code=500, detail="Download failed on server.")
 
-        if not final_file or not os.path.exists(final_file):
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            raise HTTPException(status_code=500, detail="File merge failed")
+        file_path = os.path.join(temp_dir, downloaded_files[0])
+        final_filename = f"{title}_{quality}.{ext}"
 
         background_tasks.add_task(shutil.rmtree, temp_dir, True)
-        download_name = f"{title}_{quality}.{ext}"
+        return FileResponse(path=file_path, filename=final_filename, media_type=media_type)
 
-        return FileResponse(
-            path=final_file,
-            media_type=media_type,
-            filename=download_name,
-        )
     except Exception as e:
-        shutil.rmtree(temp_dir, ignore_errors=True)
+        shutil.rmtree(temp_dir, True)
         raise HTTPException(status_code=400, detail=str(e))
