@@ -20,6 +20,34 @@ app.add_middleware(
 def clean_filename(title: str) -> str:
     return re.sub(r'[\\/*?:"<>|]', "", title).strip()[:60] or "media"
 
+def get_base_ydl_opts() -> dict:
+    opts = {
+        'quiet': True,
+        'no_warnings': True,
+        'nocheckcertificate': True,
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'ios', 'web'],
+            }
+        },
+        'http_headers': {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+            'Accept-Language': 'en-US,en;q=0.9',
+        }
+    }
+
+    # Render Environment Variable ya cookies.txt se YouTube cookies load karne ke liye
+    cookies_content = os.environ.get("YOUTUBE_COOKIES")
+    if cookies_content:
+        cookie_file = "/tmp/youtube_cookies.txt"
+        with open(cookie_file, "w", encoding="utf-8") as f:
+            f.write(cookies_content)
+        opts["cookiefile"] = cookie_file
+    elif os.path.exists("cookies.txt"):
+        opts["cookiefile"] = "cookies.txt"
+
+    return opts
+
 @app.get('/')
 @app.head('/')
 def home():
@@ -27,11 +55,9 @@ def home():
 
 @app.get('/info')
 def get_info(url: str = Query(..., description="YouTube, Instagram, or Facebook URL")):
-    ydl_opts = {
-        'quiet': True,
-        'no_warnings': True,
-        'skip_download': True,
-    }
+    ydl_opts = get_base_ydl_opts()
+    ydl_opts['skip_download'] = True
+
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -67,6 +93,7 @@ def get_info(url: str = Query(..., description="YouTube, Instagram, or Facebook 
             "audio_formats": audio_buttons,
         }
     except Exception as e:
+        print("INFO ERROR:", str(e))
         raise HTTPException(status_code=400, detail=str(e))
 
 @app.get('/download')
@@ -77,7 +104,8 @@ def download_media(
 ):
     temp_dir = tempfile.mkdtemp()
     try:
-        info_opts = {'quiet': True, 'no_warnings': True}
+        info_opts = get_base_ydl_opts()
+        info_opts['skip_download'] = True
         with yt_dlp.YoutubeDL(info_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             title = clean_filename(info.get("title", "media"))
@@ -85,34 +113,25 @@ def download_media(
         unique_id = str(uuid.uuid4())[:8]
         out_template = os.path.join(temp_dir, f"{title}_{unique_id}.%(ext)s")
 
+        ydl_opts = get_base_ydl_opts()
+        ydl_opts['outtmpl'] = out_template
+
         if quality == "mp3":
-            ydl_opts = {
-                'format': 'bestaudio/best',
-                'outtmpl': out_template,
-                'quiet': True,
-                'postprocessors': [{
-                    'key': 'FFmpegExtractAudio',
-                    'preferredcodec': 'mp3',
-                    'preferredquality': '192',
-                }],
-            }
+            ydl_opts['format'] = 'bestaudio/best'
+            ydl_opts['postprocessors'] = [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }]
             ext = "mp3"
             media_type = "audio/mpeg"
         elif quality == "m4a":
-            ydl_opts = {
-                'format': 'bestaudio[ext=m4a]/bestaudio/best',
-                'outtmpl': out_template,
-                'quiet': True,
-            }
+            ydl_opts['format'] = 'bestaudio[ext=m4a]/bestaudio/best'
             ext = "m4a"
             media_type = "audio/mp4"
         else:
-            ydl_opts = {
-                'format': f'bestvideo[height<={quality}]+bestaudio/best[height<={quality}]/best',
-                'outtmpl': out_template,
-                'merge_output_format': 'mp4',
-                'quiet': True,
-            }
+            ydl_opts['format'] = f'bestvideo[height<={quality}]+bestaudio/best[height<={quality}]/best'
+            ydl_opts['merge_output_format'] = 'mp4'
             ext = "mp4"
             media_type = "video/mp4"
 
@@ -131,4 +150,5 @@ def download_media(
 
     except Exception as e:
         shutil.rmtree(temp_dir, True)
+        print("DOWNLOAD ERROR:", str(e))
         raise HTTPException(status_code=400, detail=str(e))
