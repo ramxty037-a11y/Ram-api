@@ -25,23 +25,16 @@ def get_base_ydl_opts() -> dict:
         'quiet': True,
         'no_warnings': True,
         'nocheckcertificate': True,
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['android', 'ios', 'web'],
-            }
-        },
-        'http_headers': {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-            'Accept-Language': 'en-US,en;q=0.9',
-        }
+        'js_runtimes': {'node': {}},
     }
 
     # Render Environment Variable ya cookies.txt se YouTube cookies load karne ke liye
     cookies_content = os.environ.get("YOUTUBE_COOKIES")
     if cookies_content:
         cookie_file = "/tmp/youtube_cookies.txt"
+        clean_cookies = cookies_content.replace("\r\n", "\n").strip() + "\n"
         with open(cookie_file, "w", encoding="utf-8") as f:
-            f.write(cookies_content)
+            f.write(clean_cookies)
         opts["cookiefile"] = cookie_file
     elif os.path.exists("cookies.txt"):
         opts["cookiefile"] = "cookies.txt"
