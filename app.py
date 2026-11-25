@@ -20,38 +20,35 @@ app.add_middleware(
 def clean_filename(title: str) -> str:
     return re.sub(r'[\\/*?:"<>|]', "", title).strip()[:60] or "media"
 
+def normalize_url(url: str) -> str:
+    shorts_match = re.search(r'(?:youtube\.com|youtu\.be)/shorts/([a-zA-Z0-9_-]+)', url)
+    if shorts_match:
+        return f"https://www.youtube.com/watch?v={shorts_match.group(1)}"
+    return url
+
 def get_base_ydl_opts() -> dict:
     opts = {
         'quiet': True,
         'no_warnings': True,
         'nocheckcertificate': True,
+        'source_address': '0.0.0.0',
         'js_runtimes': {'node': {}},
-        'extractor_args': {
-            'youtube': {
-                'player_client': ['mweb', 'tv', 'web'],
-            }
-        },
+        'remote_components': ['ejs:github'],
     }
 
-    cookie_source = None
+    writable_cookie_path = "/tmp/youtube_cookies.txt"
     if os.path.exists("/etc/secrets/cookies.txt"):
-        cookie_source = "/etc/secrets/cookies.txt"
+        shutil.copyfile("/etc/secrets/cookies.txt", writable_cookie_path)
+        opts["cookiefile"] = writable_cookie_path
     elif os.path.exists("cookies.txt"):
-        cookie_source = "cookies.txt"
+        shutil.copyfile("cookies.txt", writable_cookie_path)
+        opts["cookiefile"] = writable_cookie_path
     elif os.environ.get("YOUTUBE_COOKIES"):
         raw_cookies = os.environ.get("YOUTUBE_COOKIES", "")
-        cookie_source = "/tmp/youtube_cookies.txt"
         clean_cookies = raw_cookies.replace("\r\n", "\n").strip() + "\n"
-        with open(cookie_source, "w", encoding="utf-8") as f:
+        with open(writable_cookie_path, "w", encoding="utf-8") as f:
             f.write(clean_cookies)
-
-    if cookie_source:
-        opts["cookiefile"] = cookie_source
-        with open(cookie_source, "r", encoding="utf-8", errors="ignore") as f:
-            line_count = len(f.readlines())
-        print(f"yt-dlp {yt_dlp.version.__version__} | Cookies loaded from {cookie_source} ({line_count} lines)")
-    else:
-        print(f"yt-dlp {yt_dlp.version.__version__} | No cookies found")
+        opts["cookiefile"] = writable_cookie_path
 
     return opts
 
@@ -62,12 +59,13 @@ def home():
 
 @app.get('/info')
 def get_info(url: str = Query(..., description="YouTube, Instagram, or Facebook URL")):
+    target_url = normalize_url(url)
     ydl_opts = get_base_ydl_opts()
     ydl_opts['skip_download'] = True
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+            info = ydl.extract_info(target_url, download=False)
         
         formats = info.get("formats", [])
         available_heights = set()
@@ -109,12 +107,13 @@ def download_media(
     url: str = Query(...),
     quality: str = Query("720")
 ):
+    target_url = normalize_url(url)
     temp_dir = tempfile.mkdtemp()
     try:
         info_opts = get_base_ydl_opts()
         info_opts['skip_download'] = True
         with yt_dlp.YoutubeDL(info_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+            info = ydl.extract_info(target_url, download=False)
             title = clean_filename(info.get("title", "media"))
 
         unique_id = str(uuid.uuid4())[:8]
@@ -143,7 +142,7 @@ def download_media(
             media_type = "video/mp4"
 
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            ydl.download([url])
+            ydl.download([target_url])
 
         downloaded_files = os.listdir(temp_dir)
         if not downloaded_files:
