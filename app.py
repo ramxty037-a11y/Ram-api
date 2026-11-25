@@ -23,7 +23,7 @@ def clean_filename(title: str) -> str:
 def normalize_url(url: str) -> str:
     shorts_match = re.search(r'(?:youtube\.com|youtu\.be)/shorts/([a-zA-Z0-9_-]+)', url)
     if shorts_match:
-        return f"https://www.youtube.com/watch?v={shorts_match.group(1)}"
+        return "https://www.youtube.com/watch?v=" + shorts_match.group(1)
     return url
 
 def get_base_ydl_opts() -> dict:
