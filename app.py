@@ -26,18 +26,32 @@ def get_base_ydl_opts() -> dict:
         'no_warnings': True,
         'nocheckcertificate': True,
         'js_runtimes': {'node': {}},
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['mweb', 'tv', 'web'],
+            }
+        },
     }
 
-    # Render Environment Variable ya cookies.txt se YouTube cookies load karne ke liye
-    cookies_content = os.environ.get("YOUTUBE_COOKIES")
-    if cookies_content:
-        cookie_file = "/tmp/youtube_cookies.txt"
-        clean_cookies = cookies_content.replace("\r\n", "\n").strip() + "\n"
-        with open(cookie_file, "w", encoding="utf-8") as f:
-            f.write(clean_cookies)
-        opts["cookiefile"] = cookie_file
+    cookie_source = None
+    if os.path.exists("/etc/secrets/cookies.txt"):
+        cookie_source = "/etc/secrets/cookies.txt"
     elif os.path.exists("cookies.txt"):
-        opts["cookiefile"] = "cookies.txt"
+        cookie_source = "cookies.txt"
+    elif os.environ.get("YOUTUBE_COOKIES"):
+        raw_cookies = os.environ.get("YOUTUBE_COOKIES", "")
+        cookie_source = "/tmp/youtube_cookies.txt"
+        clean_cookies = raw_cookies.replace("\r\n", "\n").strip() + "\n"
+        with open(cookie_source, "w", encoding="utf-8") as f:
+            f.write(clean_cookies)
+
+    if cookie_source:
+        opts["cookiefile"] = cookie_source
+        with open(cookie_source, "r", encoding="utf-8", errors="ignore") as f:
+            line_count = len(f.readlines())
+        print(f"yt-dlp {yt_dlp.version.__version__} | Cookies loaded from {cookie_source} ({line_count} lines)")
+    else:
+        print(f"yt-dlp {yt_dlp.version.__version__} | No cookies found")
 
     return opts
 
